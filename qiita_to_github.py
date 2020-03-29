@@ -58,26 +58,27 @@ def download(url, local_path):
 
 def fix_image(dst_folder, line):
     """Qiitaのサーバーの画像ファイルから自分のリポジトリのファイルを表示するように修正する."""
-    images = re.findall(r'https://qiita-image-store.+?\.(?:png|gif|jpeg|jpg)', line)
+    images = re.findall(
+        r'https://qiita-image-store.+?\.(?:png|gif|jpeg|jpg)', line)
     if not images:
         return line
     for url in images:
         name = url.split("/")[-1]
-        download(url, dst_folder + '/image/' + name)
+        download(url, os.path.join(dst_folder, 'assets', name))
         ix = line.find(url)
 
-        line = line.replace(url, '/image/' + name)
+        line = line.replace(url, 'assets/' + name)
     return line
 
 
-def fix_mypage_link(github_url, line, dict_title):
+def fix_mypage_link(line, dict_title):
     """自分の記事へのURLを修正する"""
     for url in dict_title.keys():
-        line = line.replace(url, github_url + '/' + dict_title[url] + '.md')
+        line = line.replace(url, dict_title[url] + '.md')
     return line
 
 
-def fix_markdown(github_url, dst_folder, body, dict_title):
+def fix_markdown(dst_folder, body, dict_title):
     """GitHubのマークダウンで表示できるように修正します."""
     result = ''
     lines = body.splitlines()
@@ -97,38 +98,83 @@ def fix_markdown(github_url, dst_folder, body, dict_title):
         # ・自分の記事へのリンクの修正
         # ・改行コードの後にスペースを２ついれる
         if not code_block_flg:
-            line = fix_mypage_link(github_url, line, dict_title)
+            line = fix_mypage_link(line, dict_title)
             line = fix_newline(line)
 
         result += line
         result += '\n'
     return result
 
+
+def remove_bogus_letter(line):
+    return re.sub(r'[^a-zA-Z0-9_\-]', '', line)
+
+
+def extract_post_name(item):
+    ix = item['created_at'].find('T')
+    created_at = item['created_at'][:ix]
+
+    un_bogus_title = remove_bogus_letter(item['title'])
+    if un_bogus_title == '':
+        un_bogus_title = item['id']
+
+    return created_at + '-' + un_bogus_title
+
+
+def create_yaml_list(str_list):
+    return '\n'.join(map(lambda x: '- ' + x, str_list))
+
+
+def create_tags_list(item):
+    tag_names = map(lambda x: x['name'], item['tags'])
+    return create_yaml_list(tag_names)
+
+
+def create_front_matter(item):
+    return '\n'.join([
+        '---',
+        'layout: post',
+        'title: ' + item['title'],
+        'published: ' + ('false' if item['private'] == 'true' else 'true'),
+        'tags:',
+        create_tags_list(item),
+        'created_at: ' + item['created_at'],
+        'updated_at: ' + item['updated_at'],
+        '---'
+    ]) + '\n'
+
+
 if __name__ == '__main__':
     argvs = sys.argv
     argc = len(argvs)
-    if argc != 5:
-        print("Usage #python %s [userid] [accesstoken] [保存先フォルダ] [GitHubのブロブのルートURL ex.https://github.com/mima3/note/blob/master]" % argvs[0])
+    if argc != 4:
+        print(
+            "Usage #python %s [userid] [accesstoken] [保存先フォルダ]" % argvs[0])
         exit()
 
     user = argvs[1]
     token = argvs[2]
     dst = argvs[3]
-    github_url = argvs[4]
+    asserts_path = os.path.join(dst, 'assets')
 
     if not os.path.exists(dst):
         os.mkdir(dst)
-    if not os.path.exists(dst + '/image'):
-        os.mkdir(dst + '/image')
+    if not os.path.exists(asserts_path):
+        os.mkdir(asserts_path)
 
     qiitaApi = qiita_api.QiitaApi(token)
 
     items = qiitaApi.query_user_items(user)
     dict_title = {}
     for i in items:
-        dict_title[i['url']] = i['title']
+        dict_title[i['url']] = extract_post_name(i)
 
-    for i in items:
-        text = fix_markdown(github_url, dst, i['body'], dict_title)
-        with open(dst + '/' + i['title'] + '.md', 'w', encoding='utf-8') as md_file:
+    for i in items[:2]:
+        print('Trying to save ' + i['title'])
+
+        post_name = extract_post_name(i)
+        front_matter = create_front_matter(i)
+        text = fix_markdown(dst, i['body'], dict_title)
+        with open(os.path.join(dst, post_name + '.md'), 'w', encoding='utf-8') as md_file:
+            md_file.write(front_matter)
             md_file.write(text)
