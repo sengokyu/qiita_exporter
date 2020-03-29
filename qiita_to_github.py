@@ -11,7 +11,22 @@ import sys
 import re
 import urllib
 import os
+import yaml
 import qiita_api
+
+
+class Paths:
+    def __init__(self, root_path):
+        self.posts = os.path.join(root_path, '_posts')
+        self.images = os.path.join(root_path, 'assets', 'images')
+
+    def __makedirs(self, target):
+        if not os.path.exists(target):
+            os.makedirs(target)
+
+    def makedirs(self):
+        self.__makedirs(self.posts)
+        self.__makedirs(self.images)
 
 
 def fix_titlemiss(line):
@@ -64,10 +79,10 @@ def fix_image(dst_folder, line):
         return line
     for url in images:
         name = url.split("/")[-1]
-        download(url, os.path.join(dst_folder, 'assets', name))
+        download(url, os.path.join(dst_folder, name))
         ix = line.find(url)
 
-        line = line.replace(url, 'assets/' + name)
+        line = line.replace(url, '/assets/images/' + name)
     return line
 
 
@@ -78,7 +93,7 @@ def fix_mypage_link(line, dict_title):
     return line
 
 
-def fix_markdown(dst_folder, body, dict_title):
+def fix_markdown(paths, body, dict_title):
     """GitHubのマークダウンで表示できるように修正します."""
     result = ''
     lines = body.splitlines()
@@ -92,7 +107,7 @@ def fix_markdown(dst_folder, body, dict_title):
                 if ix != -1:
                     result += "**" + line[ix+1:] + "**  \n"
         line = fix_titlemiss(line)
-        line = fix_image(dst_folder, line)
+        line = fix_image(paths.images, line)
 
         # コードブロックの外では以下の処理を行う
         # ・自分の記事へのリンクの修正
@@ -121,25 +136,19 @@ def extract_post_name(item):
     return created_at + '-' + un_bogus_title
 
 
-def create_yaml_list(str_list):
-    return '\n'.join(map(lambda x: '- ' + x, str_list))
-
-
-def create_tags_list(item):
-    tag_names = map(lambda x: x['name'], item['tags'])
-    return create_yaml_list(tag_names)
-
-
 def create_front_matter(item):
+    front_matter = {
+        'layout': 'post',
+        'title': item['title'],
+        'published': ('false' if item['private'] == 'true' else 'true'),
+        'tags': map(lambda x: x['name'], item['tags']),
+        'created_at: ': item['created_at'],
+        'updated_at: ': item['updated_at'],
+    }
+
     return '\n'.join([
         '---',
-        'layout: post',
-        'title: ' + item['title'],
-        'published: ' + ('false' if item['private'] == 'true' else 'true'),
-        'tags:',
-        create_tags_list(item),
-        'created_at: ' + item['created_at'],
-        'updated_at: ' + item['updated_at'],
+        yaml.dump(front_matter),
         '---'
     ]) + '\n'
 
@@ -154,13 +163,8 @@ if __name__ == '__main__':
 
     user = argvs[1]
     token = argvs[2]
-    dst = argvs[3]
-    asserts_path = os.path.join(dst, 'assets')
-
-    if not os.path.exists(dst):
-        os.mkdir(dst)
-    if not os.path.exists(asserts_path):
-        os.mkdir(asserts_path)
+    paths = Paths(argvs[3])
+    paths.makedirs()
 
     qiitaApi = qiita_api.QiitaApi(token)
 
@@ -169,12 +173,12 @@ if __name__ == '__main__':
     for i in items:
         dict_title[i['url']] = extract_post_name(i)
 
-    for i in items[:2]:
+    for i in items:
         print('Trying to save ' + i['title'])
 
         post_name = extract_post_name(i)
         front_matter = create_front_matter(i)
-        text = fix_markdown(dst, i['body'], dict_title)
-        with open(os.path.join(dst, post_name + '.md'), 'w', encoding='utf-8') as md_file:
+        text = fix_markdown(paths, i['body'], dict_title)
+        with open(os.path.join(paths.posts, post_name + '.md'), 'w', encoding='utf-8') as md_file:
             md_file.write(front_matter)
             md_file.write(text)
