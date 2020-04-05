@@ -93,6 +93,12 @@ def fix_mypage_link(line, dict_title):
     return line
 
 
+def escape_liquid_tag(line):
+    """liquidタグをエスケープする."""
+    p = re.compile('({[' + '{%' + '])')
+    return p.sub(r'{{"\1"}}', line)
+
+
 def fix_markdown(paths, body, dict_title):
     """GitHubのマークダウンで表示できるように修正します."""
     result = ''
@@ -108,6 +114,7 @@ def fix_markdown(paths, body, dict_title):
                     result += "**" + line[ix+1:] + "**  \n"
         line = fix_titlemiss(line)
         line = fix_image(paths.images, line)
+        line = escape_liquid_tag(line)
 
         # コードブロックの外では以下の処理を行う
         # ・自分の記事へのリンクの修正
@@ -121,15 +128,17 @@ def fix_markdown(paths, body, dict_title):
     return result
 
 
-def remove_bogus_letter(line):
+def slugify(line):
+    """ファイル名として使いたくない文字を削除する."""
     return re.sub(r'[^a-zA-Z0-9_\-]', '', line)
 
 
-def extract_post_name(item):
+def generate_post_name(item):
+    """ポストの名前を生成する."""
     ix = item['created_at'].find('T')
     created_at = item['created_at'][:ix]
 
-    un_bogus_title = remove_bogus_letter(item['title'])
+    un_bogus_title = slugify(item['title'])
     if un_bogus_title == '':
         un_bogus_title = item['id']
 
@@ -137,18 +146,21 @@ def extract_post_name(item):
 
 
 def create_front_matter(item):
+    """Liquid Front Matterを作成する."""
     front_matter = {
         'layout': 'post',
         'title': item['title'],
-        'published': ('false' if item['private'] == 'true' else 'true'),
-        'tags': map(lambda x: x['name'], item['tags']),
-        'created_at: ': item['created_at'],
-        'updated_at: ': item['updated_at'],
+        'published': not item['private'],
+        'tags': list(map(lambda x: x['name'], item['tags'])),
+        'date': item['created_at'],
+        'updated': item['updated_at'],
+        'qiita_article_id': item['id'],
     }
 
     return '\n'.join([
         '---',
-        yaml.dump(front_matter),
+        yaml.dump(front_matter,
+                  encoding='utf-8', allow_unicode=True).decode('utf-8'),
         '---'
     ]) + '\n'
 
@@ -156,14 +168,14 @@ def create_front_matter(item):
 if __name__ == '__main__':
     argvs = sys.argv
     argc = len(argvs)
-    if argc != 4:
+    if argc != 3:
         print(
-            "Usage #python %s [userid] [accesstoken] [保存先フォルダ]" % argvs[0])
+            "Usage #python %s [userid] [accesstoken]" % argvs[0])
         exit()
 
     user = argvs[1]
     token = argvs[2]
-    paths = Paths(argvs[3])
+    paths = Paths("docs")  # 出力先は固定
     paths.makedirs()
 
     qiitaApi = qiita_api.QiitaApi(token)
@@ -171,12 +183,12 @@ if __name__ == '__main__':
     items = qiitaApi.query_user_items(user)
     dict_title = {}
     for i in items:
-        dict_title[i['url']] = extract_post_name(i)
+        dict_title[i['url']] = generate_post_name(i)
 
     for i in items:
         print('Trying to save ' + i['title'])
 
-        post_name = extract_post_name(i)
+        post_name = generate_post_name(i)
         front_matter = create_front_matter(i)
         text = fix_markdown(paths, i['body'], dict_title)
         with open(os.path.join(paths.posts, post_name + '.md'), 'w', encoding='utf-8') as md_file:
